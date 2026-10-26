@@ -35,7 +35,9 @@ const egress = new EgressClient(httpUrl, LIVEKIT_API_KEY, LIVEKIT_API_SECRET);
 const webhookReceiver = new WebhookReceiver(LIVEKIT_API_KEY, LIVEKIT_API_SECRET);
 
 // ---------- tiny JSON persistence (rooms + attendance survive restarts) ----------
-const DATA_FILE = path.join(__dirname, 'data.json');
+// On a host with a persistent disk, set DATA_DIR to the disk's mount path (e.g. /var/data).
+const DATA_DIR = process.env.DATA_DIR || __dirname;
+const DATA_FILE = path.join(DATA_DIR, 'data.json');
 let db = { rooms: {} };
 try {
   db = JSON.parse(fs.readFileSync(DATA_FILE, 'utf8'));
@@ -48,6 +50,9 @@ function save() {
 
 // ---------- helpers ----------
 const app = express();
+// The host (Render, Railway, ...) puts a proxy in front of the app. Trust it so req.ip
+// is the student's real address and req.secure reflects HTTPS.
+app.set('trust proxy', 1);
 
 function makeCode() {
   const alphabet = 'ABCDEFGHJKLMNPQRSTUVWXYZ23456789'; // no look-alike characters
@@ -146,7 +151,7 @@ app.post('/api/host/login', rateLimit(10, 60000), (req, res) => {
   if (!ok) return res.status(401).json({ error: 'Wrong password' });
   res.setHeader(
     'Set-Cookie',
-    `host=${makeHostCookie()}; HttpOnly; SameSite=Strict; Path=/; Max-Age=${12 * 3600}`
+    `host=${makeHostCookie()}; HttpOnly; SameSite=Strict; Path=/; Max-Age=${12 * 3600}${req.secure ? '; Secure' : ''}`
   );
   res.json({ ok: true });
 });
@@ -295,7 +300,8 @@ app.post('/api/host/rooms/:code/record/stop', requireHost, async (req, res) => {
 });
 
 // ---------- public: student join ----------
-app.post('/api/join', rateLimit(300, 60000), async (req, res) => {
+// Generous limit: a whole campus may share one public IP address and join at once.
+app.post('/api/join', rateLimit(1500, 60000), async (req, res) => {
   const code = String(req.body.code || '').trim().toUpperCase();
   const name = cleanName(req.body.name);
   const room = db.rooms[code];
