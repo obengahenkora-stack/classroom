@@ -1,0 +1,61 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Join class</title>
+  <link rel="stylesheet" href="/style.css">
+</head>
+<body>
+  <div class="center">
+    <form class="card" id="f">
+      <h1>Join your class</h1>
+      <p class="sub">No account needed. Enter the class code and your official name.</p>
+
+      <label for="code">Class code</label>
+      <input type="text" id="code" maxlength="6" autocomplete="off" autocapitalize="characters" placeholder="e.g. K7M2QX" required>
+
+      <label for="name">Your official name</label>
+      <input type="text" id="name" maxlength="80" autocomplete="name" placeholder="First name and surname" required>
+      <div class="hint">Use the same name as on your student record. This is used for attendance.</div>
+
+      <button class="full" id="go" type="submit">Join class</button>
+      <div class="err" id="err"></div>
+      <p class="hint" style="margin-top:18px"><a href="/host.html">Teacher login</a></p>
+    </form>
+  </div>
+
+<script>
+  const params = new URLSearchParams(location.search);
+  if (params.get('code')) document.getElementById('code').value = params.get('code').toUpperCase();
+  try { document.getElementById('name').value = localStorage.getItem('studentName') || ''; } catch (_) {}
+
+  document.getElementById('f').addEventListener('submit', async (e) => {
+    e.preventDefault();
+    const btn = document.getElementById('go');
+    const err = document.getElementById('err');
+    err.textContent = '';
+    btn.disabled = true;
+    btn.textContent = 'Joining...';
+    try {
+      const code = document.getElementById('code').value.trim().toUpperCase();
+      const name = document.getElementById('name').value.trim();
+      const r = await fetch('/api/join', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ code, name }),
+      });
+      const data = await r.json();
+      if (!r.ok) throw new Error(data.error || 'Could not join');
+      try { localStorage.setItem('studentName', name); } catch (_) {}
+      sessionStorage.setItem('session', JSON.stringify({ ...data, code, role: 'student' }));
+      location.href = '/room.html';
+    } catch (ex) {
+      err.textContent = ex.message;
+      btn.disabled = false;
+      btn.textContent = 'Join class';
+    }
+  });
+</script>
+</body>
+</html>

@@ -1,0 +1,138 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Teacher dashboard</title>
+  <link rel="stylesheet" href="/style.css">
+</head>
+<body>
+  <div class="center" id="loginView" style="display:none">
+    <form class="card" id="loginForm">
+      <h1>Teacher login</h1>
+      <p class="sub">Enter the host password to create and run classes.</p>
+      <label for="pw">Password</label>
+      <input type="password" id="pw" autocomplete="current-password" required>
+      <button class="full" type="submit">Log in</button>
+      <div class="err" id="loginErr"></div>
+      <p class="hint" style="margin-top:18px"><a href="/">Student join page</a></p>
+    </form>
+  </div>
+
+  <div class="center" id="dashView" style="display:none; align-items:flex-start">
+    <div class="card wide">
+      <div class="row between">
+        <h1>Your classes</h1>
+        <button class="ghost small" id="logout">Log out</button>
+      </div>
+      <p class="sub">Create a class, share the link or code with students, then start it.</p>
+
+      <form class="row" id="newForm">
+        <input type="text" id="title" placeholder="Class title (e.g. Biology 101, Week 6)" maxlength="80">
+        <button type="submit" style="white-space:nowrap">Create class</button>
+      </form>
+      <div class="err" id="dashErr"></div>
+
+      <table>
+        <thead>
+          <tr><th>Class</th><th>Code</th><th>Students</th><th></th></tr>
+        </thead>
+        <tbody id="rows"></tbody>
+      </table>
+      <p class="hint" id="empty" style="display:none">No classes yet.</p>
+    </div>
+  </div>
+
+<script>
+  const $ = (id) => document.getElementById(id);
+
+  async function api(path, opts = {}) {
+    const r = await fetch(path, {
+      method: opts.method || 'GET',
+      headers: { 'Content-Type': 'application/json' },
+      body: opts.body ? JSON.stringify(opts.body) : undefined,
+    });
+    const data = await r.json().catch(() => ({}));
+    if (!r.ok) throw new Error(data.error || 'Request failed');
+    return data;
+  }
+
+  function show(loggedIn) {
+    $('loginView').style.display = loggedIn ? 'none' : 'flex';
+    $('dashView').style.display = loggedIn ? 'flex' : 'none';
+    if (loggedIn) load();
+  }
+
+  function esc(s) {
+    return String(s).replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
+  }
+
+  async function load() {
+    try {
+      const rooms = await api('/api/host/rooms');
+      $('empty').style.display = rooms.length ? 'none' : 'block';
+      $('rows').innerHTML = rooms.map((r) => {
+        const link = `${location.origin}/?code=${r.code}`;
+        return `<tr>
+          <td>${esc(r.title)}<div class="hint">${new Date(r.createdAt).toLocaleString()}${r.recording ? ' · recording' : ''}</div></td>
+          <td><span class="code">${r.code}</span></td>
+          <td>${r.attended}</td>
+          <td>
+            <div class="row" style="justify-content:flex-end; flex-wrap:wrap">
+              <a class="btn small" href="/room.html?host=1&code=${r.code}">Start / open</a>
+              <button class="ghost small" data-copy="${esc(link)}">Copy link</button>
+              <a class="btn ghost small" href="/api/host/rooms/${r.code}/attendance.csv">Attendance CSV</a>
+            </div>
+          </td>
+        </tr>`;
+      }).join('');
+    } catch (e) {
+      $('dashErr').textContent = e.message;
+    }
+  }
+
+  document.addEventListener('click', async (e) => {
+    const b = e.target.closest('[data-copy]');
+    if (!b) return;
+    try {
+      await navigator.clipboard.writeText(b.dataset.copy);
+      const old = b.textContent;
+      b.textContent = 'Copied';
+      setTimeout(() => (b.textContent = old), 1500);
+    } catch (_) {
+      prompt('Copy this link:', b.dataset.copy);
+    }
+  });
+
+  $('loginForm').addEventListener('submit', async (e) => {
+    e.preventDefault();
+    $('loginErr').textContent = '';
+    try {
+      await api('/api/host/login', { method: 'POST', body: { password: $('pw').value } });
+      show(true);
+    } catch (ex) {
+      $('loginErr').textContent = ex.message;
+    }
+  });
+
+  $('newForm').addEventListener('submit', async (e) => {
+    e.preventDefault();
+    $('dashErr').textContent = '';
+    try {
+      await api('/api/host/rooms', { method: 'POST', body: { title: $('title').value } });
+      $('title').value = '';
+      load();
+    } catch (ex) {
+      $('dashErr').textContent = ex.message;
+    }
+  });
+
+  $('logout').addEventListener('click', async () => {
+    await api('/api/host/logout', { method: 'POST' });
+    show(false);
+  });
+
+  api('/api/host/me').then((d) => show(d.host)).catch(() => show(false));
+</script>
+</body>
+</html>

@@ -1,0 +1,52 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Classroom</title>
+  <link rel="stylesheet" href="/style.css">
+</head>
+<body>
+  <div class="room">
+    <div class="topbar">
+      <div class="title" id="title">Connecting...</div>
+      <span class="pill" id="count">0 in class</span>
+      <span class="pill rec" id="recPill" style="display:none">REC</span>
+      <div class="spacer"></div>
+      <span class="pill" id="me"></span>
+    </div>
+
+    <div class="main">
+      <div class="stage" id="stage">
+        <div class="waiting" id="waiting">Waiting for the teacher to start sharing...</div>
+      </div>
+
+      <div class="side">
+        <div class="tabs">
+          <button class="active" data-tab="chat">Chat</button>
+          <button data-tab="people" id="peopleTabBtn">People</button>
+        </div>
+
+        <div class="panel active" id="panel-chat">
+          <div class="messages" id="messages"></div>
+          <form class="composer" id="chatForm">
+            <input type="text" id="chatInput" placeholder="Type a message" maxlength="400" autocomplete="off">
+            <button type="submit" id="chatSend">Send</button>
+          </form>
+        </div>
+
+        <div class="panel" id="panel-people">
+          <div style="padding:10px"><input type="search" id="filter" placeholder="Search students"></div>
+          <div class="plist" id="plist"></div>
+        </div>
+      </div>
+    </div>
+
+    <div class="controls" id="controls"></div>
+  </div>
+  <div class="toast" id="toast" style="display:none"></div>
+
+  <script src="https://cdn.jsdelivr.net/npm/livekit-client@2/dist/livekit-client.umd.min.js"></script>
+  <script src="/room.js"></script>
+</body>
+</html>
