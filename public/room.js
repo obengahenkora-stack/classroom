@@ -160,6 +160,14 @@ function addVideoTile(track, participant, source) {
   const el = track.attach();
   el.muted = participant === room.localParticipant ? true : el.muted;
   tile.appendChild(el);
+  if (source !== Track.Source.ScreenShare) {
+    const nm = participant === room.localParticipant ? 'You' : participant.name || '?';
+    tile.dataset.initial = nm.trim().charAt(0).toUpperCase();
+    const syncMuted = () => tile.classList.toggle('novideo', !!track.isMuted);
+    syncMuted();
+    track.on('muted', syncMuted);
+    track.on('unmuted', syncMuted);
+  }
   const label = document.createElement('div');
   label.className = 'label';
   const who = participant === room.localParticipant ? 'You' : participant.name || 'Speaker';
@@ -175,7 +183,34 @@ function removeTile(sid) {
   updateWaiting();
 }
 function updateWaiting() {
+  layoutStage();
   $('waiting').style.display = document.querySelector('.tile') ? 'none' : 'flex';
+}
+
+// While someone shares their screen, the shared screen takes the main area and the
+// camera tiles move into a small strip beside it (like Zoom's "speaker" layout).
+function layoutStage() {
+  const stage = $('stage');
+  const tiles = [...stage.querySelectorAll('.tile')];
+  const hasScreen = tiles.some((t) => t.classList.contains('screen'));
+  let thumbs = $('thumbs');
+  if (hasScreen) {
+    stage.classList.add('has-screen');
+    if (!thumbs) {
+      thumbs = document.createElement('div');
+      thumbs.id = 'thumbs';
+      stage.appendChild(thumbs);
+    }
+    tiles.filter((t) => !t.classList.contains('screen')).forEach((t) => {
+      if (t.parentElement !== thumbs) thumbs.appendChild(t);
+    });
+  } else {
+    stage.classList.remove('has-screen');
+    if (thumbs) {
+      [...thumbs.children].forEach((t) => stage.appendChild(t));
+      thumbs.remove();
+    }
+  }
 }
 
 // ---------------------------------------------------------------- counts / people
