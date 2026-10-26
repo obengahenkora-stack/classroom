@@ -5,6 +5,16 @@ const $ = (id) => document.getElementById(id);
 const params = new URLSearchParams(location.search);
 const isHostMode = params.get('host') === '1';
 
+const REACTIONS = ['\u{1F44D}', '\u{1F44F}', '❤️', '\u{1F602}', '\u{1F62E}', '\u{1F64F}'];
+let lastReactAt = 0;
+let roomLocked = false;
+let pending = [];          // students waiting to be admitted
+let pendingTotal = 0;
+let pendingSig = '';
+const enc = new TextEncoder();
+const dec = new TextDecoder();
+let handUp = false;
+
 let session = null;       // { token, url, identity, code, title, role, hostIdentity }
 let room = null;
 let isHost = false;
@@ -116,6 +126,7 @@ async function connect() {
   });
 
   onCountChange();
+  if (isHost) startPendingPoll();
   addSys(isHost ? 'You are the host. Turn on your camera or share your screen to begin.' : 'You joined the class.');
 
   // Tell the server when a student leaves (for the attendance "left" time).
@@ -185,8 +196,27 @@ function renderPeople() {
   });
   const shown = list.filter((p) => !q || (p.name || '').toLowerCase().includes(q)).slice(0, 200);
   const handCount = [...raised.keys()].length;
-  $('peopleTabBtn').textContent = handCount ? `People (${handCount} ✋)` : 'People';
-  $('plist').innerHTML =
+  const labelParts = [];
+  if (handCount) labelParts.push(`${handCount} \u270B`);
+  if (pendingTotal) labelParts.push(`${pendingTotal} waiting`);
+  $('peopleTabBtn').textContent = labelParts.length ? `People (${labelParts.join(' \u00B7 ')})` : 'People';
+
+  const waitList = pending.filter((p) => !q || p.name.toLowerCase().includes(q));
+  const waitHtml = pendingTotal
+    ? `<div class="row between" style="padding:6px 0"><strong style="font-size:13px">Waiting to join (${pendingTotal})</strong><button class="small" data-act="admitall">Admit all</button></div>` +
+      waitList
+        .map(
+          (p) => `<div class="person">
+          <span class="nm" title="${esc(p.name)}">${esc(p.name)}</span>
+          <button class="small" data-act="admit" data-t="${esc(p.ticket)}">Admit</button>
+          <button class="small danger" data-act="deny" data-t="${esc(p.ticket)}">Deny</button>
+        </div>`
+        )
+        .join('') +
+      (pendingTotal > pending.length ? `<div class="hint">Showing the first ${pending.length}. Use Admit all for the rest.</div>` : '') +
+      '<div class="hint" style="margin:12px 0 2px">In class</div>'
+    : '';
+  const peopleHtml =
     shown
       .map((p) => {
         const speaking = p.permissions && p.permissions.canPublish;
@@ -199,6 +229,7 @@ function renderPeople() {
       })
       .join('') ||
     '<div class="hint" style="padding:10px">No students match.</div>';
+  $('plist').innerHTML = waitHtml + peopleHtml;
 }
 $('filter').addEventListener('input', () => isHost && renderPeople());
 
@@ -207,7 +238,17 @@ $('plist').addEventListener('click', async (e) => {
   if (!b) return;
   const id = b.dataset.id;
   try {
-    if (b.dataset.act === 'speak') {
+    if (b.dataset.act === 'admit') {
+      await api(`/api/host/rooms/${session.code}/admit`, { tickets: [b.dataset.t] });
+      pollPending();
+    } else if (b.dataset.act === 'deny') {
+      await api(`/api/host/rooms/${session.code}/deny`, { tickets: [b.dataset.t] });
+      pollPending();
+    } else if (b.dataset.act === 'admitall') {
+      const r = await api(`/api/host/rooms/${session.code}/admit`, { all: true });
+      toast(`Admitted ${r.admitted} student(s)`);
+      pollPending();
+    } else if (b.dataset.act === 'speak') {
       await api(`/api/host/rooms/${session.code}/allow-speak`, { identity: id, allow: b.dataset.allow === '1' });
       raised.delete(id);
       setTimeout(renderPeople, 400);
@@ -220,10 +261,28 @@ $('plist').addEventListener('click', async (e) => {
   }
 });
 
-// ---------------------------------------------------------------- chat + hand raise (data channel)
-const enc = new TextEncoder();
-const dec = new TextDecoder();
+// ---------------------------------------------------------------- waiting room (host)
+async function pollPending() {
+  try {
+    const r = await fetch(`/api/host/rooms/${session.code}/pending`);
+    if (!r.ok) return;
+    const d = await r.json();
+    const sig = d.total + ':' + d.list.map((p) => p.ticket).join(',') + ':' + d.waiting;
+    if (sig === pendingSig) return; // nothing changed, don't redraw the list
+    if (d.total > pendingTotal) toast(`${d.total - pendingTotal} student(s) waiting to join`);
+    pendingSig = sig;
+    pending = d.list;
+    pendingTotal = d.total;
+    if ($('bWaiting')) $('bWaiting').textContent = d.waiting ? 'Waiting room: On' : 'Waiting room: Off';
+    renderPeople();
+  } catch (_) {}
+}
+function startPendingPoll() {
+  pollPending();
+  setInterval(pollPending, 4000);
+}
 
+// ---------------------------------------------------------------- chat + hand raise (data channel)
 function addMessage(name, text, fromHost) {
   const m = document.createElement('div');
   m.className = 'msg' + (fromHost ? ' host' : '');
@@ -270,6 +329,11 @@ function onData(payload, participant, kind, topic) {
     addSys(chatLocked ? 'The teacher turned chat off.' : 'The teacher turned chat on.');
   } else if (topic === 'recording' && fromHost) {
     setRecording(!!msg.active);
+  } else if (topic === 'reaction') {
+    if (isHost || fromHost) showReaction(msg.emoji);
+  } else if (topic === 'lowerhands' && fromHost) {
+    handUp = false;
+    if ($('bHand')) $('bHand').textContent = '✋ Raise hand';
   }
 }
 
@@ -301,8 +365,6 @@ async function sendToAll(topic, obj) {
 }
 
 // ---------------------------------------------------------------- controls
-let handUp = false;
-
 function btn(id, label, cls = '') {
   return `<button id="${id}" class="${cls}">${label}</button>`;
 }
@@ -314,6 +376,13 @@ function buildControls() {
       btn('bCam', 'Camera', 'ghost'),
       btn('bScreen', 'Share screen', 'ghost'),
       btn('bChat', 'Turn chat off', 'ghost'),
+      btn('bReact', '\u{1F44F} React', 'ghost'),
+      btn('bMuteAll', 'Mute all speakers', 'ghost'),
+      btn('bLower', 'Lower all hands', 'ghost'),
+      btn('bLock', session.locked ? 'Unlock class' : 'Lock class', 'ghost'),
+      btn('bWaiting', session.waiting ? 'Waiting room: On' : 'Waiting room: Off', 'ghost'),
+      btn('bInvite', 'Copy invite link', 'ghost'),
+      btn('bFull', 'Full screen', 'ghost'),
       btn('bRec', 'Start recording', 'ghost'),
       `<a class="btn ghost" href="/api/host/rooms/${session.code}/attendance.csv">Attendance CSV</a>`,
       btn('bEnd', 'End class', 'danger'),
@@ -356,6 +425,8 @@ function buildControls() {
       btn('bHand', '✋ Raise hand', 'ghost'),
       btn('bMic', 'Mic', 'ghost" style="display:none'),
       btn('bCam', 'Camera', 'ghost" style="display:none'),
+      btn('bReact', '\u{1F44F} React', 'ghost'),
+      btn('bFull', 'Full screen', 'ghost'),
       btn('bLeave', 'Leave', 'danger'),
     ].join('');
 
@@ -383,7 +454,127 @@ function buildControls() {
       location.href = '/';
     };
   }
+  wireExtras();
   updateChatState();
+}
+
+// ---------------------------------------------------------------- extra Zoom-style buttons
+function wireExtras() {
+  roomLocked = !!(session && session.locked);
+
+  $('bReact').onclick = toggleReactMenu;
+  $('bFull').onclick = () => {
+    if (document.fullscreenElement) {
+      document.exitFullscreen();
+    } else {
+      document.querySelector('.room').requestFullscreen().catch(() => toast('Full screen is not available here.'));
+    }
+  };
+
+  if (!isHost) return;
+
+  $('bInvite').onclick = async () => {
+    const link = `${location.origin}/?code=${session.code}`;
+    try {
+      await navigator.clipboard.writeText(link);
+      toast('Invite link copied. Share it with your students.');
+    } catch (_) {
+      prompt('Copy this invite link:', link);
+    }
+  };
+  $('bMuteAll').onclick = async () => {
+    if (!confirm('Take speaking permission away from all students?')) return;
+    try {
+      const r = await api(`/api/host/rooms/${session.code}/mute-all`);
+      toast(r.muted ? `Muted ${r.muted} student(s)` : 'No students were speaking.');
+      setTimeout(renderPeople, 500);
+    } catch (ex) {
+      toast(ex.message);
+    }
+  };
+  $('bLower').onclick = async () => {
+    raised.clear();
+    renderPeople();
+    try {
+      await sendToAll('lowerhands', {});
+      toast('All hands lowered');
+    } catch (_) {}
+  };
+  $('bWaiting').onclick = async () => {
+    try {
+      const turnOn = $('bWaiting').textContent.indexOf('Off') !== -1;
+      const r = await api(`/api/host/rooms/${session.code}/waiting`, { enabled: turnOn });
+      $('bWaiting').textContent = r.waiting ? 'Waiting room: On' : 'Waiting room: Off';
+      toast(r.waiting ? 'Waiting room on. New students wait until you admit them.' : 'Waiting room off. Students join straight in.');
+      pendingSig = '';
+      pollPending();
+    } catch (ex) {
+      toast(ex.message);
+    }
+  };
+  $('bLock').onclick = async () => {
+    try {
+      const r = await api(`/api/host/rooms/${session.code}/lock`, { locked: !roomLocked });
+      roomLocked = r.locked;
+      $('bLock').textContent = roomLocked ? 'Unlock class' : 'Lock class';
+      toast(roomLocked ? 'Class locked. Nobody new can join.' : 'Class unlocked.');
+    } catch (ex) {
+      toast(ex.message);
+    }
+  };
+}
+
+function toggleReactMenu() {
+  const old = $('reactMenu');
+  if (old) {
+    old.remove();
+    return;
+  }
+  const m = document.createElement('div');
+  m.id = 'reactMenu';
+  m.className = 'reactmenu';
+  REACTIONS.forEach((e) => {
+    const b = document.createElement('button');
+    b.className = 'ghost';
+    b.textContent = e;
+    b.onclick = () => {
+      sendReaction(e);
+      m.remove();
+    };
+    m.appendChild(b);
+  });
+  document.body.appendChild(m);
+}
+
+async function sendReaction(emoji) {
+  const now = Date.now();
+  if (!isHost && now - lastReactAt < 2000) return;
+  lastReactAt = now;
+  showReaction(emoji);
+  try {
+    if (isHost) {
+      await sendToAll('reaction', { emoji });
+    } else {
+      // Student reactions go to the teacher only, so 500 students can't flood each other.
+      await room.localParticipant.publishData(enc.encode(JSON.stringify({ emoji })), {
+        reliable: false,
+        topic: 'reaction',
+        destinationIdentities: [session.hostIdentity],
+      });
+    }
+  } catch (_) {}
+}
+
+function showReaction(emoji) {
+  if (!REACTIONS.includes(emoji)) return; // only our own emoji list is ever shown
+  const stage = $('stage');
+  if (stage.querySelectorAll('.float').length > 25) return;
+  const el = document.createElement('div');
+  el.className = 'float';
+  el.textContent = emoji;
+  el.style.left = 5 + Math.random() * 85 + '%';
+  stage.appendChild(el);
+  setTimeout(() => el.remove(), 3000);
 }
 
 async function toggleLocal(what) {

@@ -48,14 +48,56 @@
       const data = await r.json();
       if (!r.ok) throw new Error(data.error || 'Could not join');
       try { localStorage.setItem('studentName', name); } catch (_) {}
-      sessionStorage.setItem('session', JSON.stringify({ ...data, code, role: 'student' }));
-      location.href = '/room.html';
+
+      // The teacher has the waiting room on: wait here until they admit us.
+      if (data.pending) {
+        await waitForAdmission(code, data.ticket);
+        return;
+      }
+      enterClass(data, code);
     } catch (ex) {
       err.textContent = ex.message;
       btn.disabled = false;
       btn.textContent = 'Join class';
     }
   });
+
+  function enterClass(data, code) {
+    sessionStorage.setItem('session', JSON.stringify({ ...data, code, role: 'student' }));
+    location.href = '/room.html';
+  }
+
+  // Poll every ~5 seconds (with a little random spread so 500 students don't all ask at once).
+  async function waitForAdmission(code, ticket) {
+    const btn = document.getElementById('go');
+    const err = document.getElementById('err');
+    btn.textContent = 'Waiting for the teacher to let you in...';
+    err.style.color = 'var(--muted)';
+    err.textContent = 'Please keep this page open. You will join automatically.';
+    const giveUp = (msg) => {
+      err.style.color = '';
+      err.textContent = msg;
+      btn.disabled = false;
+      btn.textContent = 'Join class';
+    };
+    for (;;) {
+      await new Promise((res) => setTimeout(res, 4000 + Math.random() * 2000));
+      let r, d;
+      try {
+        r = await fetch('/api/join/status', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ code, ticket }),
+        });
+        d = await r.json();
+      } catch (_) {
+        continue; // network blip, keep trying
+      }
+      if (r.status === 404) return giveUp('Your request timed out. Please click Join class again.');
+      if (d.status === 'admitted') return enterClass(d.session, code);
+      if (d.status === 'denied') return giveUp('The teacher did not admit you. Check your name and try again.');
+    }
+  }
 </script>
 </body>
 </html>
